@@ -25,12 +25,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Display GitHub OIDC information
+      - name: Display actual GitHub OIDC claims
+        shell: bash
         run: |
-          echo "Repository: ${{ github.repository }}"
-          echo "Branch reference: ${{ github.ref }}"
-          echo "Expected subject: repo:${{ github.repository }}:ref:${{ github.ref }}"
-          echo "Expected audience: sts.amazonaws.com"
+          RESPONSE=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          TOKEN=$(echo "$RESPONSE" | jq -r '.value')
+          export TOKEN
+          python3 -c 'import os,json,base64; p=os.environ["TOKEN"].split(".")[1]; p += "=" * (-len(p) % 4); d=json.loads(base64.urlsafe_b64decode(p)); print(json.dumps({k:d.get(k) for k in ("iss","aud","sub","repository","ref")},indent=2))'
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
