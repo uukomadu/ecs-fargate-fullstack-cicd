@@ -59,7 +59,7 @@ pipeline {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'your-aws-credentials-id']]) {
                     script {
                         sh '''
-                            aws ecs update-service --devops-challenge-cluster --service devops-challenge-frontend-service --force-new-deployment --region $AWS_REGION
+                            aws ecs update-service --cluster devops-challenge-cluster --service devops-challenge-frontend-service --force-new-deployment --region $AWS_REGION
                             aws ecs update-service --cluster devops-challenge-cluster --service devops-challenge-backend-service --force-new-deployment --region $AWS_REGION
                         '''
                     }
