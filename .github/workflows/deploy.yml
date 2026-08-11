@@ -1,4 +1,4 @@
-name: Deploy to ECS 2
+name: Deploy to ECS
 
 on:
   push:
@@ -23,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v3
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: arn:aws:iam::506570851351:role/GithubActions-ECS-Deploy-Role
           aws-region: ${{ env.AWS_REGION }}
