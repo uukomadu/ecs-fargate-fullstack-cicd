@@ -404,6 +404,183 @@ Use the following configuration:
 
 Enable the GitHub hook trigger in the Jenkins pipeline job. A push to the `main` branch should start the pipeline automatically.
 
+# GitOps Deployment with GitHub Actions
+The repository also includes a GitOps deployment workflow at `.github/workflows/deploy.yml`. A push to the `gitops` branch starts the workflow automatically.
+
+The workflow performs the following stages:
+1. Checkout the repository
+2. Authenticate to AWS using GitHub OpenID Connect
+3. Log in to Amazon ECR
+4. Build the frontend and backend Docker images
+5. Tag and push both images to Amazon ECR
+6. Force new frontend and backend ECS deployments
+
+The AWS values used by the workflow are:
+```
+AWS Region: us-east-2
+AWS Account: 506570851351
+ECS Cluster: devops-challenge-cluster
+Frontend ECR Repository: devops-challenge-frontend
+Backend ECR Repository: devops-challenge-backend
+Frontend Service: devops-challenge-frontend-service
+Backend Service: devops-challenge-backend-service
+```
+
+# GitHub Actions Workflow
+Create the workflow directory from the repository root:
+```
+mkdir -p .github/workflows
+```
+
+Create `.github/workflows/deploy.yml` with the following configuration:
+```yaml
+name: Deploy to ECS
+
+on:
+  push:
+    branches:
+      - gitops
+
+env:
+  AWS_REGION: us-east-2
+  ECR_FRONTEND: 506570851351.dkr.ecr.us-east-2.amazonaws.com/devops-challenge-frontend
+  ECR_BACKEND: 506570851351.dkr.ecr.us-east-2.amazonaws.com/devops-challenge-backend
+  CLUSTER_NAME: devops-challenge-cluster
+  FRONTEND_SVC: devops-challenge-frontend-service
+  BACKEND_SVC: devops-challenge-backend-service
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::506570851351:role/GithubActions-ECS-Deploy-Role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push frontend image
+        run: |
+          docker build -t frontend:latest ./frontend
+          docker tag frontend:latest $ECR_FRONTEND:latest
+          docker push $ECR_FRONTEND:latest
+
+      - name: Build, tag, and push backend image
+        run: |
+          docker build -t backend:latest ./backend
+          docker tag backend:latest $ECR_BACKEND:latest
+          docker push $ECR_BACKEND:latest
+
+      - name: Update ECS frontend service
+        run: |
+          aws ecs update-service --cluster $CLUSTER_NAME --service $FRONTEND_SVC --force-new-deployment --region $AWS_REGION
+
+      - name: Update ECS backend service
+        run: |
+          aws ecs update-service --cluster $CLUSTER_NAME --service $BACKEND_SVC --force-new-deployment --region $AWS_REGION
+```
+
+The `id-token: write` permission allows GitHub Actions to request an OIDC token. No long-lived AWS access key or secret access key is stored in GitHub.
+
+# AWS OIDC Provider
+Open `IAM`, then `Identity providers`, and create an OpenID Connect provider with the following values:
+```
+Provider URL: https://token.actions.githubusercontent.com
+Audience: sts.amazonaws.com
+```
+
+The provider ARN for this deployment is:
+```
+arn:aws:iam::506570851351:oidc-provider/token.actions.githubusercontent.com
+```
+
+# GitHub Actions IAM Role
+Create the IAM role `GithubActions-ECS-Deploy-Role` and attach the following policies:
+1. `AmazonEC2ContainerRegistryPowerUser`
+2. `AmazonECS_FullAccess`
+
+The role ARN is:
+```
+arn:aws:iam::506570851351:role/GithubActions-ECS-Deploy-Role
+```
+
+Use the following trust policy:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::506570851351:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:uukomadu@30909268/devops-code-challenge1@1328953304:ref:refs/heads/gitops"
+        }
+      }
+    }
+  ]
+}
+```
+
+This repository uses a customized GitHub OIDC subject containing the GitHub owner and repository numeric IDs. The trust policy must use the exact subject shown above. Using `repo:uukomadu/devops-code-challenge1:ref:refs/heads/gitops` causes AWS to reject the request with `Not authorized to perform sts:AssumeRoleWithWebIdentity`.
+
+# Run the GitOps Deployment
+Create and switch to the `gitops` branch if it does not already exist:
+```
+git checkout -b gitops
+```
+
+Stage, commit, and push the workflow:
+```
+git add .github/workflows/deploy.yml
+git commit -m "Add GitOps ECS deployment workflow"
+git push -u origin gitops
+```
+
+Future changes pushed to `gitops` trigger the workflow automatically:
+```
+git add <changed-files>
+git commit -m "Describe the deployment change"
+git push origin gitops
+```
+
+Open the repository in GitHub, select `Actions`, then open `Deploy to ECS` to monitor the `build-and-deploy` job.
+
+After the workflow succeeds, wait for both services to stabilize:
+```
+aws ecs wait services-stable \
+  --cluster devops-challenge-cluster \
+  --services devops-challenge-frontend-service devops-challenge-backend-service \
+  --region us-east-2
+```
+
+# GitOps Troubleshooting
+If `Configure AWS credentials` fails with `Not authorized to perform sts:AssumeRoleWithWebIdentity`, verify all of the following:
+1. The workflow contains `id-token: write`.
+2. The OIDC provider URL is `https://token.actions.githubusercontent.com`.
+3. The OIDC audience is `sts.amazonaws.com`.
+4. The workflow role ARN matches `GithubActions-ECS-Deploy-Role` exactly.
+5. The trust policy subject contains the customized owner and repository IDs.
+6. The workflow was triggered from the `gitops` branch.
+
+The Node.js deprecation message displayed by GitHub Actions is a warning and is not an AWS authentication failure. Use `actions/checkout@v4` and `aws-actions/configure-aws-credentials@v5` as shown in the workflow.
+
 # Verify the Deployment
 A successful Jenkins pipeline confirms that the images were built, pushed to ECR, and that ECS accepted the deployment requests. ECS may still require several minutes to replace its tasks and complete the ALB health checks.
 
