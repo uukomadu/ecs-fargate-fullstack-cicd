@@ -1,4 +1,4 @@
-name: Deploy Services to ECS
+name: Deploy to ECS 2
 
 on:
   push:
